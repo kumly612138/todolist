@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>雲端日曆待辦清單</title>
+    <style>
+        :root { --bg: #f5f0e9; --primary: #c4a484; --accent: #8e735b; --text: #5d4e42; --card: #ffffff; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; justify-content: center; }
+        .container { width: 100%; max-width: 800px; text-align: center; }
+        
+        /* 密碼層 */
+        #lock-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+        .login-card { background: #fff; padding: 40px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        
+        #sync-status { font-size: 0.8rem; color: var(--primary); margin-bottom: 10px; height: 1.2rem; font-weight: bold; }
+        
+        .control-panel { background: #fff; padding: 20px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .date-row { margin-bottom: 15px; display: flex; justify-content: center; align-items: center; gap: 10px; }
+        
+        .kanban { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 600px) { .kanban { grid-template-columns: 1fr; } }
+        
+        .column { background: rgba(255,255,255,0.4); border-radius: 15px; padding: 15px; min-height: 300px; text-align: left; }
+        .column-title { font-weight: bold; border-bottom: 2px solid var(--primary); padding-bottom: 10px; margin-bottom: 15px; color: var(--accent); }
+        
+        .task-card { background: #fff; padding: 12px; border-radius: 10px; margin-bottom: 10px; display: flex; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.03); }
+        .checkbox { margin-right: 10px; cursor: pointer; transform: scale(1.2); }
+        .task-text { flex: 1; font-size: 0.95rem; }
+        .done-column .task-text { text-decoration: line-through; color: #ccc; }
+        
+        input, button, select { padding: 12px; border-radius: 10px; border: 1px solid #ddd; outline: none; }
+        .date-input { background: var(--bg); border: none; font-weight: bold; color: var(--accent); cursor: pointer; }
+        .add-btn { background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        .add-btn:hover { opacity: 0.8; }
+    </style>
+</head>
+<body>
+
+<div id="lock-screen">
+    <div class="login-card">
+        <h2>🔒 雲端日誌解鎖</h2>
+        <input type="password" id="pwField" placeholder="請輸入密碼" style="width:200px; margin-bottom:15px; text-align:center;">
+        <br>
+        <button class="add-btn" style="width:225px;" onclick="unlock()">解鎖</button>
+    </div>
+</div>
+
+<div id="main-content" style="display:none;" class="container">
+    <h1>My Schedule</h1>
+    <div id="sync-status">☁️ 雲端同步已就緒</div>
+
+    <div class="control-panel">
+        <div class="date-row">
+            <span>📅 查看日期：</span>
+            <input type="date" id="datePicker" class="date-input" onchange="changeDate()">
+        </div>
+        <div style="display:flex; gap:10px;">
+            <input type="text" id="taskInput" placeholder="寫下該日期的任務..." style="flex:1;">
+            <button class="add-btn" onclick="addTask()">ADD</button>
+        </div>
+    </div>
+
+    <div class="kanban">
+        <div class="column">
+            <div class="column-title">⏳ 待處理 PENDING</div>
+            <div id="pendingList"></div>
+        </div>
+        <div class="column done-column">
+            <div class="column-title">✅ 已完成 DONE</div>
+            <div id="doneList"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 【這裡替換為你的 Google Script URL】
+    const CLOUD_URL = "https://script.google.com/macros/s/AKfycbyuG3h8NfgbNKocI6dc35JzFOhipJAt1v7tUbpHtQiUtTzhwNZoKP0bVhk-L7Dr9j3L/exec";
+    const MY_PW = "0813"; 
+    
+    let allData = {}; // 結構為 { "2024-01-13": [...tasks], "2024-01-14": [...] }
+    let currentDate = new Date().toISOString().split('T')[0];
+
+    function unlock() {
+        if (document.getElementById('pwField').value === MY_PW) {
+            document.getElementById('lock-screen').style.display = 'none';
+            document.getElementById('main-content').style.display = 'block';
+            document.getElementById('datePicker').value = currentDate;
+            loadFromCloud();
+        } else { alert("密碼錯誤"); }
+    }
+
+    // 從雲端載入所有日期的資料
+    async function loadFromCloud() {
+        updateStatus("☁️ 正在載入雲端資料...");
+        try {
+            const res = await fetch(CLOUD_URL);
+            allData = await res.json();
+            render();
+            updateStatus("☁️ 同步完成");
+        } catch (e) { 
+            allData = {};
+            updateStatus("🆕 歡迎使用 (建立新紀錄)");
+        }
+    }
+
+    // 儲存到雲端
+    async function saveToCloud() {
+        updateStatus("☁️ 正在保存變動...");
+        await fetch(CLOUD_URL, {
+            method: 'POST',
+            body: JSON.stringify(allData)
+        });
+        updateStatus("✅ 雲端已存檔");
+    }
+
+    function changeDate() {
+        currentDate = document.getElementById('datePicker').value;
+        render();
+    }
+
+    function addTask() {
+        const input = document.getElementById('taskInput');
+        if (!input.value.trim()) return;
+
+        // 如果該日期還沒建立過清單，初始化它
+        if (!allData[currentDate]) allData[currentDate] = [];
+        
+        allData[currentDate].push({
+            id: Date.now(),
+            text: input.value,
+            done: false
+        });
+
+        input.value = '';
+        render();
+        saveToCloud();
+    }
+
+    function toggleTask(id) {
+        allData[currentDate] = allData[currentDate].map(t => 
+            t.id === id ? {...t, done: !t.done} : t
+        );
+        render();
+        saveToCloud();
+    }
+
+    function deleteTask(id) {
+        if(!confirm("確定刪除此項工作？")) return;
+        allData[currentDate] = allData[currentDate].filter(t => t.id !== id);
+        render();
+        saveToCloud();
+    }
+
+    function render() {
+        const pList = document.getElementById('pendingList');
+        const dList = document.getElementById('doneList');
+        pList.innerHTML = ''; dList.innerHTML = '';
+
+        const dayTasks = allData[currentDate] || [];
+
+        dayTasks.forEach(t => {
+            const card = document.createElement('div');
+            card.className = 'task-card';
+            card.innerHTML = `
+                <input type="checkbox" class="checkbox" ${t.done ? 'checked' : ''} onclick="toggleTask(${t.id})">
+                <div class="task-text">${t.text}</div>
+                <span style="color:#ddd; cursor:pointer; margin-left:10px;" onclick="deleteTask(${t.id})">✕</span>
+            `;
+            if (t.done) dList.appendChild(card);
+            else pList.appendChild(card);
+        });
+
+        if (dayTasks.length === 0) {
+            pList.innerHTML = '<div style="color:#bbb; font-size:0.8rem; text-align:center; padding-top:20px;">這天還沒有任務喔！</div>';
+        }
+    }
+
+    function updateStatus(msg) {
+        document.getElementById('sync-status').innerText = msg;
+    }
+</script>
+</body>
+</html>
